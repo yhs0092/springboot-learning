@@ -12,6 +12,7 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <start-class>indi.yhs.Example</start-class>
     </properties>
 
     <!-- Inherit defaults from Spring Boot -->
@@ -36,7 +37,6 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>indi.yhs.Example</mainClass>
                     <layout>JAR</layout>
                 </configuration>
             </plugin>

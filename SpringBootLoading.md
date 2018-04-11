@@ -46,7 +46,7 @@
 
 ## <div id="BootstrapApplicationListener">BootstrapApplicationListener生成新的Spring Context</div>
 
-### 1. Application Source
+### <div id="BootstrapApplicationListener.applicationSource">1. Application Source</div>
 BootstrapApplicationListener新生成的SpringApplication里面包含了4个source:
   0. org.springframework.cloud.bootstrap.config.PropertySourceBootstrapConfiguration
   1. org.springframework.cloud.bootstrap.encrypt.EncryptionBootstrapConfiguration
@@ -140,3 +140,8 @@ debug过程中发现加载的有：
 监听`ApplicationEvent`，打印auto configuration相关的信息。
 
 - SpringApplication.java 351行，调用`listeners.contextPrepared()`，但是`EventPublishingRunListener.contextPrepared()`方法没有实现内容，所以没有触发任何操作。
+
+#### 3.4. load source
+> 这里的source是[`BootstrapApplicationListener`构建`SpringApplication`时设置进去的source](#BootstrapApplicationListener.applicationSource)。
+
+貌似是加载和注册Bean的，但是里面的代码没看明白。

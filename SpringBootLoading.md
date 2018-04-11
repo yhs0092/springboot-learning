@@ -118,3 +118,25 @@ Spring Boot在这里加载配置文件，操作内容包括：
 `SpringBootConfigMergeProcessor`是实现了`Ordered`接口的最低优先级的`EnvironmentPostProcessor`。
 
 #### 3.3. prepareContext
+
+##### 3.3.1 createApplicationContext
+
+- SpringApplication.java 312行，创建了一个`org.springframework.context.annotation.AnnotationConfigApplicationContext`。`ApplicationContext`中默认初始化的`Environment`会被覆盖设置为上一步中的`ConfigurableEnvironment`。
+
+- SpringApplication.java 349行，postProcessApplicationContext。加载`beanNameGenerator`，在`ApplicationContext`中设置`resourceLoader`，debug过程中发现这两个都是null，所以没有设置。
+
+- SpringApplication.java 350行，applyInitializers。设置`ApplicationContextInitializer`，***根据网上查到的资料，`ApplicationContextInitializer`是Spring容器刷新之前执行的回调函数，对`ConfigurableApplicationContext`进行操作。***<br/>
+debug过程中发现加载的有：
+  0. DelegatingApplicationContextInitializer<br/>
+  根据`context.initializer.classes`配置项配置的类名加载委托`ApplicationContextInitializer`，将`ConfigurableApplicationContext`交给委托类初始化。
+  1. ContextIdApplicationContextInitializer<br/>
+  根据某些配置项生成ApplicationContext ID。
+  2. ConfigurationWarningsApplicationContextInitializer<br/>
+  ApplicationContextInitializer to report warnings for common misconfiguration mistakes. 用于检查配置错误。
+  3. ServerPortInfoApplicationContextInitializer<br/>
+  在`ConfigurableApplicationContext`中加入一个`ApplicationListener`监听`EmbeddedServletContainerInitializedEvent`，用于向`Environment`设置`EmbeddedServletContainer`实际监听的端口号。
+  4. SharedMetadataReaderFactoryContextInitializer（实际作用还没弄明白）
+  5. AutoConfigurationReportLoggingInitializer<br/>
+监听`ApplicationEvent`，打印auto configuration相关的信息。
+
+- SpringApplication.java 351行，调用`listeners.contextPrepared()`，但是`EventPublishingRunListener.contextPrepared()`方法没有实现内容，所以没有触发任何操作。

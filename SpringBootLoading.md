@@ -119,6 +119,8 @@ Spring Boot在这里加载配置文件，操作内容包括：
 
 #### 3.3. prepareContext
 
+位于SpringApplication.java 312-314行。
+
 ##### 3.3.1 createApplicationContext
 
 - SpringApplication.java 312行，创建了一个`org.springframework.context.annotation.AnnotationConfigApplicationContext`。`ApplicationContext`中默认初始化的`Environment`会被覆盖设置为上一步中的`ConfigurableEnvironment`。
@@ -141,7 +143,47 @@ debug过程中发现加载的有：
 
 - SpringApplication.java 351行，调用`listeners.contextPrepared()`，但是`EventPublishingRunListener.contextPrepared()`方法没有实现内容，所以没有触发任何操作。
 
-#### 3.4. load source
+##### 3.3.2 load source
 > 这里的source是[`BootstrapApplicationListener`构建`SpringApplication`时设置进去的source](#BootstrapApplicationListener.applicationSource)。
 
-貌似是加载和注册Bean的，但是里面的代码没看明白。
+入口位于SpringApplication.java 367行。
+
+貌似是加载和注册Bean的，但是里面的代码没完全看明白。<br/>
+大致上做的事情是扫描设置到`SpringApplication`中的四个source，这四个source都有`@Configuration`注解，于是将这些source注册到一个`AnnotatedBeanDefinitionReader`实例中。
+
+##### 3.3.3 contextLoaded
+
+入口位于SpringApplication.java 368行。
+
+将当前`SpringApplication`中的`ApplicationListener`设置到当前`ConfigurableApplicationContext`中。（EventPublishingRunListener.java `contextLoaded()`方法的for循环）
+
+发送`ApplicationPreparedEvent`，对应的Listener有：
+0. ConfigFileApplicationListener<br/>
+在当前`ConfigurableApplicationContext`中加入了一个`PropertySourceOrderingPostProcessor`
+1. LoggingApplicationListener
+2. RestartListener<br/>
+A listener that stores enough information about an application as it starts, to be able to restart it later if needed. 在响应这个事件的操作中只做了一些设置。
+3. DelegatingApplicationListener<br/>
+前文已经提到`DelegatingApplicationListener`会加载一些委托`ApplicationListener`，这里会将事件传给委托类（如果存在委托类的话）。
+
+#### 3.4. refreshContext
+
+> 入口在SpringApplication.java 316行。
+
+##### 3.4.1 prepareRefresh
+
+0. `ClassPathBeanDefinitionScanner`清空cache。
+1. initPropertySources
+2. Environment.validateRequiredProperties
+
+##### 3.4.2 obtainFreshBeanFactory
+
+0. refreshBeanFactory
+
+#### 3.5. afterRefresh
+
+#### 3.6. listeners.finished
+
+------------------------------
+后面的先略过去，先把主流程跑完一遍。
+------------------------------

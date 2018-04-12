@@ -1,29 +1,49 @@
-## SpringApplication.initialize()
+# 1 主启动流程
 
-### deduceWebEnvironment()
+## 1.1 SpringApplication.initialize()
+> 启动时设置的 source 就是`TracedZuulMain.class`本身。
+
+### 1.1.1 deduceWebEnvironment()
 是否是web程序？（如果SpringApplication.WEB_ENVIRONMENT_CLASSES中的类可以加载则是web程序）
 
-### 加载org.springframework.context.ApplicationContextInitializer
+### 1.1.2 加载org.springframework.context.ApplicationContextInitializer
+加载的initializer有：
+0. DelegatingApplicationContextInitializer
+1. ContextIdApplicationContextInitializer
+2. ConfigurationWarningsApplicationContextInitializer
+3. ServerPortInfoApplicationContextInitializer
+4. SharedMetadataReaderFactoryContextInitializer
+5. AutoConfigurationReportLoggingInitializer
 
-### 加载org.springframework.context.ApplicationListener
+### 1.1.3 加载org.springframework.context.ApplicationListener
+加载的 ApplicationListener 有：
+0. BootstrapApplicationListener
+1. LoggingSystemShutdownListener
+2. ConfigFileApplicationListener
+3. AnsiOutputApplicationListener
+4. LoggingApplicationListener
+5. ClasspathLoggingApplicationListener
+6. BackgroundPreinitializer
+7. RestartListener
+8. DelegatingApplicationListener
+9. ParentContextCloserApplicationListener
+10. ClearCachesApplicationListener
+11. FileEncodingApplicationListener
+12. LiquibaseServiceLocatorApplicationListener
 
-### 找出启动的Main类
+### 1.1.4 找出启动的Main类
 
-## SpringApplication.run()
-  > - SpringApplication.run()方法中初始化了一个SpringApplicationRunListeners对象，SpringApplication.run()方法执行到不同阶段时会调用SpringApplicationRunListeners的不同方法去触发其内部的SpringApplicationRunListener对象的对应方法，以广播不同的ApplicationEvent。
-  > - 当前SpringApplicationRunListener的实现类只有EventPublishingRunListener，其内部使用SimpleApplicationEventMulticaster广播事件。
+## 1.2 SpringApplication.run()
+  > - `SpringApplication.run()`方法中初始化了一个 SpringApplicationRunListeners 对象，`SpringApplication.run()`方法执行到不同阶段时会调用`SpringApplicationRunListeners`的不同方法去触发其内部的`SpringApplicationRunListener`对象的对应方法，以广播不同的`ApplicationEvent`。
+  > - 当前`SpringApplicationRunListener`的实现类只有`EventPublishingRunListener`，其内部使用`SimpleApplicationEventMulticaster`广播事件。
   >
-  > ![](http://7x2wh6.com1.z0.glb.clouddn.com/startup2.jpg "SpringApplicationRunListeners")
+  > ![](http://7x2wh6.com1.z0.glb.clouddn.com/startup2.jpg "SpringApplicationRunListeners工作逻辑")
 
 
-### SpringApplicationRunListeners的关键时间点
+### 1.2.1 SpringApplicationRunListeners的关键时间点
 
 - started  
-  广播ApplicationStartedEvent。对应Listener为  
-  1. ConfigFileApplicationListener（但是此处广播的事件类型ApplicationStartedEvent不会触发ConfigFileApplicationListener的动作）
-  2. LoggingApplicationListener
-  3. DelegatingApplicationListener
-  4. LiquibaseServiceLocatorApplicationListener
+
 - prepareEnvironment  
   1. 构造一个ConfigurableEnvironment对象（也有可能是之前set进去的）
   2. 加载一些propertySource，包括SystemProperty、SystemEnvironment（此时还不会读取配置文件）
@@ -43,6 +63,58 @@
 - contextPrepared
 - contextLoaded
 - finished
+
+### 1.2.2 started
+> 入口为 SpringApplication.java 304-305行
+
+加载`SpringApplicationRunListeners`实例，里面的`SpringApplicationRunListener`实例只有一个，就是`org.springframework.boot.context.event.EventPublishingRunListener`。
+
+广播ApplicationStartedEvent。对应Listener为
+1. ConfigFileApplicationListener （但是此处广播的事件类型ApplicationStartedEvent不会触发ConfigFileApplicationListener的动作）
+2. LoggingApplicationListener
+3. DelegatingApplicationListener （DelegatingApplicationListener没有动作）
+4. LiquibaseServiceLocatorApplicationListener （作用不明）
+
+### 1.2.3 prepareEnvironment
+> 入口为 SpringApplication.java 309行。
+
+#### 1.2.3.1 生成及初始化ConfigurableEnvironment
+初始化`ConfigurableEnvironment`，生成的是`StandardServletEnvironment`实例。
+
+配置`PropertySources`。构造`StandardServletEnvironment`实例的时候已经在里面设置了一些property source，包括一些servlet配置、SystemProperties、SystemEnvironment。<br/>
+如果这个`SpringApplication`里面设置了`defaultProperties`，则会用这些默认属性创建一个名为"defaultProperties"的`PropertySource`，加入到`PropertySources`的末尾，即最低优先级。<br/>
+如果有commandLineProperties（就是启动代码`SpringApplication.run(TracedZuulMain.class, args)`中的`args`），则会向名为"commandLineArgs"的`PropertySource`中增加这些属性值，并将这个`PropertySource`放到`PropertySources`的最前面，即最高优先级。（放置动作取决于名为"commandLineArgs"的`PropertySource`是否事先存在，如果是则在原位置替换，否则放在最前面）
+
+配置Profile。<br/>
+如果在当前已加载的`PropertySources`中设置了`spring.profiles.active`属性值，则根据这个获取active Profile，将其设置到`Environment`的`activeProfiles`属性中。并且加入`SpringApplication.additionalProfiles`中保存的额外 profile。
+
+#### 1.2.3.2 ApplicationEnvironmentPreparedEvent
+广播`ApplicationEnvironmentPreparedEvent`，相关的`ApplicationListener`有：
+0. BootstrapApplicationListener<br/>
+特定条件下，已知是Spring Cloud场景下，会从bootstrap.yaml文件加载配置。 org.springframework.cloud.bootstrap.BootstrapApplicationListener会重新拉起一个Spring Context，并且重新跑一遍整个启动过程，此过程分析见[BootstrapApplicationListener生成新的Spring Context](#BootstrapApplicationListener "BootstrapApplicationListener生成新的Spring Context")。<br/>
+***TODO: 还有`bootstrapProperties`回合以及`DelegatingEnvironmentDecryptApplicationInitializer`没有分析***
+1. LoggingSystemShutdownListener<br/>
+<blockquote>Cleans up the logging system immediately after the bootstrap context is created on startup. Logging will go dark until the ConfigFileApplicationListener fires, but this is the price we pay for that listener being able to adjust the log levels according to what it finds in its own configuration.</blockquote>
+按照`LoggingSystemShutdownListener`的注释，应该是暂时关闭了日志记录。
+2. ConfigFileApplicationListener<br/>
+
+3. AnsiOutputApplicationListener
+4. LoggingApplicationListener
+5. ClasspathLoggingApplicationListener
+6. BackgroundPreinitializer
+7. DelegatingApplicationListener
+8. FileEncodingApplicationListener
+
+##### 1.2.3.2.1 ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent
+加载`EnvironmentPostProcessor`，包含：
+0. SpringApplicationJsonEnvironmentPostProcessor
+1. HostInfoEnvironmentPostProcessor
+2. CloudFoundryVcapEnvironmentPostProcessor
+3. ConfigFileApplicationListener
+4. SpringBootConfigMergeProcessor
+5. ServoEnvironmentPostProcessor
+
+# 附加说明
 
 ## <div id="BootstrapApplicationListener">BootstrapApplicationListener生成新的Spring Context</div>
 
@@ -187,3 +259,7 @@ A listener that stores enough information about an application as it starts, to 
 ------------------------------
 后面的先略过去，先把主流程跑完一遍。
 ------------------------------
+
+# References
+
+1. [SpringBoot源码分析之SpringBoot的启动过程](http://fangjian0423.github.io/2017/04/30/springboot-startup-analysis/ "SpringBoot源码分析之SpringBoot的启动过程")

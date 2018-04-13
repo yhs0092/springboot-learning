@@ -97,7 +97,7 @@
 <blockquote>Cleans up the logging system immediately after the bootstrap context is created on startup. Logging will go dark until the ConfigFileApplicationListener fires, but this is the price we pay for that listener being able to adjust the log levels according to what it finds in its own configuration.</blockquote>
 按照`LoggingSystemShutdownListener`的注释，应该是暂时关闭了日志记录。
 2. ConfigFileApplicationListener<br/>
-
+读取配置文件，见[ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent](#ConfigFileApplicationListener处理ApplicationEnvironmentPreparedEvent "ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent")。
 3. AnsiOutputApplicationListener
 4. LoggingApplicationListener
 5. ClasspathLoggingApplicationListener
@@ -105,12 +105,31 @@
 7. DelegatingApplicationListener
 8. FileEncodingApplicationListener
 
-##### 1.2.3.2.1 ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent
+##### <div id="ConfigFileApplicationListener处理ApplicationEnvironmentPreparedEvent">1.2.3.2.1 ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent</div>
 加载`EnvironmentPostProcessor`，包含：
-0. SpringApplicationJsonEnvironmentPostProcessor
-1. HostInfoEnvironmentPostProcessor
-2. CloudFoundryVcapEnvironmentPostProcessor
-3. ConfigFileApplicationListener
+0. SpringApplicationJsonEnvironmentPostProcessor<br/>
+从`spring.application.json`或`SPRING_APPLICATION_JSON`加载json串格式的配置项，将其增加到ConfigurableEnvironment的property sources中，新增property source的名字为`spring.application.json`，优先级高于`jndiProperties`和`systemProperties`（没有这两个时会放在最前面）。参考资料见[Spring Boot 1.4.5](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/html/boot-features-external-config.html)和[Spring Boot 2.0](https://juejin.im/entry/5a4b33e6518825258227bfbe)。
+1. HostInfoEnvironmentPostProcessor<br/>
+获取本机的网络相关的信息，生成一个名为`springCloudClientHostInfo`的property source加入到ConfigurableEnvironment中，property source的优先级为当前最低。
+2. CloudFoundryVcapEnvironmentPostProcessor<br/>
+貌似是用来处理Cloud Foundry的配置项的（存疑）。<br/>
+如果当前ConfigurableEnvironment中存在名为`VCAP_APPLICATION`或`VCAP_SERVICES`的配置项则生效，将`VCAP_APPLICATION`和`VCAP_SERVICES`中的json串配置扁平化，分别加上`vcap.application.`和`vcap.services.`前缀，放入到名为`vcap`的property source中，置入ConfigurableEnvironment，该property source的优先级仅次于"commandLineArgs"。
+3. ConfigFileApplicationListener<br/>
+Spring Boot在这里加载配置文件，操作内容包括：
+  1. 增加一个`RandomValuePropertySource`，优先级低于"systemEnvironment"（ConfigFileApplicationListener.java 210行）
+  2. 加载property source，设置active profiles
+    - 根据"spring.profiles.active"属性获取active profiles， active profiles 的优先级是后面的高于前面的（这与property sources相反，因为后面根据active profile加载property source时是用`addFirst()`方法加入到property sources中的）。 如果没有 active profile， 则增加一个default profile。然后增加了一个`null` profile。<br/>
+    ***TODO: 这里的`default`还有`null` profile究竟是如何表现的还需要实验验证***
+    - ConfigFileApplicationListener.java 377行，根据profile、文件名、路径、文件扩展名加载配置文件。加载成的property source在这个时候还不会直接加入到`ConfigurableEnvironment.propertySources`中，而是保存在当前用于加载配置文件的`PropertySourcesLoader`实例里。
+    - ConfigFileApplicationListener.java 470行，读取到配置文件后还会再一次扫描active profile，如果读取到了就会将`ConfigurableEnvironment.activeProfiles`清空并set进去，然后将`ConfigFileApplicationListener.activatedProfiles`设置为`true`以保证只会设置一次profile（方法`ConfigFileApplicationListener.maybeActivateProfiles()`会检查`activatedProfiles`）。
+    - 设置active profile之后会检查一次是否配置了`spring.profiles.include`属性，若配置了则将其中指定的 profile 加入到`ConfigFileApplicationListener`中，并设置到`ConfigurableEnvironment.activeProfiles`中（先清空再设置的）。
+    - ConfigFileApplicationListener.java 384行，经过反复加载配置文件之后（文件位置、文件名、profile、文件扩展名这几个维度），将`PropertySourcesLoader.propertySources`中保存的property sources加入到`ConfigurableEnvironment`中。
+    - ***TODO: 有条件进一步弄清楚`ConfigFileApplicationListener.loadIntoGroup()`方法的三个参数各有什么意义***<br/>
+    当`ConfigFileApplicationListener.load()`方法的profile不为null时，为什么要分三个阶段调用`loadIntoGroup()`方法。<br/>
+    _貌似这种反复加载是因为同一个配置文件中也可以配置多个profile的属性，待验证。参考[Multi-profile YAML documents](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/htmlsingle/#boot-features-external-config-multi-profile-yaml "Multi-profile YAML documents")。_
+  3. 从System property中读取名为"spring.beaninfo.ignore"的属性，如果没有则从`ConfigurableEnvironment`中解析出对应的配置项（使用`RelaxedPropertyResolver`），默认值为`true`，并设置到System property中。<br/>
+  根据查的资料，"spring.beaninfo.ignore"配置项似乎决定了是否跳过BeanInfo类加载。
+  4. Bind the environment to the SpringApplication. 具体产生了什么效果还不明确。
 4. SpringBootConfigMergeProcessor
 5. ServoEnvironmentPostProcessor
 
@@ -165,15 +184,12 @@ ConfigurableEnvironment已经set进去了，不需要再构造，[其property so
 
 ##### 3.2.2 ConfigFileApplicationListener
 `ConfigFileApplicationListener`加载了`EnvironmentPostProcessor`，包括：
-0. SpringApplicationJsonEnvironmentPostProcessor<br/>从`spring.application.json`或`SPRING_APPLICATION_JSON`加载json串格式的配置项，将其增加到ConfigurableEnvironment的property sources中，新增property source的名字为`spring.application.json`，优先级高于`jndiProperties`和`systemProperties`。参考资料见[Spring Boot 1.4.5](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/html/boot-features-external-config.html)和[Spring Boot 2.0](https://juejin.im/entry/5a4b33e6518825258227bfbe)。
-1. HostInfoEnvironmentPostProcessor<br/>
-获取本机的网络相关的信息，生成一个名为`springCloudClientHostInfo`的property source加入到ConfigurableEnvironment中，property source的优先级当前最低。
-2. CloudFoundryVcapEnvironmentPostProcessor<br/>
-貌似是用来处理Cloud Foundry的配置项的（存疑）。<br/>
-如果当前ConfigurableEnvironment中存在名为`VCAP_APPLICATION`或`VCAP_SERVICES`的配置项则生效，将`VCAP_APPLICATION`和`VCAP_SERVICES`中的json串配置扁平化，分别加上`vcap.application.`和`vcap.services.`前缀，放入到名为`vcap`的property source中，置入ConfigurableEnvironment，该property source的优先级当前最高。
+0. SpringApplicationJsonEnvironmentPostProcessor
+1. HostInfoEnvironmentPostProcessor
+2. CloudFoundryVcapEnvironmentPostProcessor
 3. ConfigFileApplicationListener<br/>
 Spring Boot在这里加载配置文件，操作内容包括：
-  1. 增加一个`RandomValuePropertySource`（ConfigFileApplicationListener.java 210行）
+  1. 增加一个`RandomValuePropertySource`，优先级低于"systemEnvironment"（ConfigFileApplicationListener.java 210行）
   2. 加载名为"bootstrap"的配置文件，包括active profile（ConfigFileApplicationListener.java 212行）
   3. 设置`spring.beaninfo.ignore`配置项，决定是否跳过`BeanInfo`类加载（ConfigFileApplicationListener.java 182行）
   还不知道是做什么的。

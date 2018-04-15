@@ -258,6 +258,76 @@ This initializer is not intended to be shared across multiple application contex
 
   监听`ApplicationEvent`，打印auto configuration相关的信息。
 
+##### 1.2.4.2.4 contextPrepared
+
+`EventPublishingRunListener.contextPrepared()`方法中没有实现逻辑。
+
+##### 1.2.4.2.5 loadSource
+入口在 SpringApplication.java 365-367行。
+
+根据source加载bean。
+
+##### 1.2.4.2.6 contextLoaded
+> Called once the application context has been loaded but before it has been refreshed.
+
+涉及如下`ApplicationListener`：
+1. BootstrapApplicationListener
+2. LoggingSystemShutdownListener
+3. ConfigFileApplicationListener
+4. AnsiOutputApplicationListener
+5. LoggingApplicationListener
+6. ClasspathLoggingApplicationListener
+7. BackgroundPreinitializer
+8. RestartListener
+9. DelegatingApplicationListener
+10. ParentContextCloserApplicationListener（ApplicationContextAware）
+11. ClearCachesApplicationListener
+12. FileEncodingApplicationListener
+13. LiquibaseServiceLocatorApplicationListener
+
+以上`ApplicationListener`都会加入到当前`ApplicationContext`中，`ApplicationContextAware`类型的Listener还会被调用`setApplicationContext()`方法。
+
+设置完毕后，会发送`ApplicationPreparedEvent`事件。能够接收该事件的Listener是：
+1. ConfigFileApplicationListener<br/>
+向 ApplicationContext 中增加一个`PropertySourceOrderingPostProcessor`，这个processor可能会重排列property sources。
+
+2. LoggingApplicationListener<br/>
+检查 ApplicationContext 中有没有一个名为"springBootLoggingSystem"的bean，如果没有则将自己的`loggingSystem`属性注册进去作为"springBootLoggingSystem"。
+
+3. RestartListener<br/>
+将当前 ApplicationContext 的引用保存下来。
+
+4. DelegatingApplicationListener<br/>
+将`ApplicationPreparedEvent`发送给代理 Listener 处理。debug过程中发现没有代理，所以没触发动作。
+
+### 1.2.5 refreshContext
+
+入口在 SpringApplication.java 316行。
+
+> Load or refresh the persistent representation of the configuration, which might an XML file, properties file, or relational database schema.
+
+#### 1.2.5.1 prepareRefresh
+
+- initPropertySources<br/>
+清空 ApplicationContext 中 `scanner` 的缓存。
+初始化`Environment`中占位的property source。（AbstractApplicationContext.java 586行）例如，_Replace Servlet-based stub property sources with actual instances populated with the given servletContext and servletConfig objects._
+- validateRequiredProperties<br/>
+_Validate that each of the properties specified by setRequiredProperties is present and resolves to a non-null value._
+- 初始化`earlyApplicationEvents`用来保存`ApplicationEvent`以便之后发送。
+
+#### 1.2.5.2 obtainFreshBeanFactory
+> Tell the subclass to refresh the internal bean factory.
+
+- refreshBeanFactory<br/>
+>Subclasses must implement this method to perform the actual configuration load. The method is invoked by refresh() before any other initialization work.
+>
+>A subclass will either create a new bean factory and hold a reference to it, or return a single BeanFactory instance that it holds. In the latter case, it will usually throw an IllegalStateException if refreshing the context more than once.
+
+  刷新`BeanFactory`并返回它的引用。
+
+
+
+
 # 附加说明
 
 ## <div id="BootstrapApplicationListener">BootstrapApplicationListener生成新的Spring Context</div>

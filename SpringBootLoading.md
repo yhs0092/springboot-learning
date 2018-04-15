@@ -73,7 +73,7 @@
 1. ConfigFileApplicationListener （但是此处广播的事件类型ApplicationStartedEvent不会触发ConfigFileApplicationListener的动作）
 2. LoggingApplicationListener
 3. DelegatingApplicationListener （DelegatingApplicationListener没有动作）
-4. LiquibaseServiceLocatorApplicationListener （作用不明）
+4. LiquibaseServiceLocatorApplicationListener
 
 ### 1.2.3 prepareEnvironment
 > 入口为 SpringApplication.java 309行。
@@ -89,32 +89,62 @@
 如果在当前已加载的`PropertySources`中设置了`spring.profiles.active`属性值，则根据这个获取active Profile，将其设置到`Environment`的`activeProfiles`属性中。并且加入`SpringApplication.additionalProfiles`中保存的额外 profile。
 
 #### 1.2.3.2 ApplicationEnvironmentPreparedEvent
-广播`ApplicationEnvironmentPreparedEvent`，相关的`ApplicationListener`有：
-0. BootstrapApplicationListener<br/>
+广播`ApplicationEnvironmentPreparedEvent`，相关的`ApplicationListener`如下。
+_目前分析的结果是，2、 4~9 都没有修改配置项的操作。_
+
+1. BootstrapApplicationListener<br/>
 特定条件下，已知是Spring Cloud场景下，会从bootstrap.yaml文件加载配置。 org.springframework.cloud.bootstrap.BootstrapApplicationListener会重新拉起一个Spring Context，并且重新跑一遍整个启动过程，此过程分析见[BootstrapApplicationListener生成新的Spring Context](#BootstrapApplicationListener "BootstrapApplicationListener生成新的Spring Context")。<br/>
-***TODO: 还有`bootstrapProperties`回合以及`DelegatingEnvironmentDecryptApplicationInitializer`没有分析***
-1. LoggingSystemShutdownListener<br/>
+**TODO: 还有`bootstrapProperties`回合以及`DelegatingEnvironmentDecryptApplicationInitializer`没有分析**
+
+2. LoggingSystemShutdownListener<br/>
 <blockquote>Cleans up the logging system immediately after the bootstrap context is created on startup. Logging will go dark until the ConfigFileApplicationListener fires, but this is the price we pay for that listener being able to adjust the log levels according to what it finds in its own configuration.</blockquote>
 按照`LoggingSystemShutdownListener`的注释，应该是暂时关闭了日志记录。
-2. ConfigFileApplicationListener<br/>
+
+3. ConfigFileApplicationListener<br/>
 读取配置文件，见[ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent](#ConfigFileApplicationListener处理ApplicationEnvironmentPreparedEvent "ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent")。
-3. AnsiOutputApplicationListener
-4. LoggingApplicationListener
-5. ClasspathLoggingApplicationListener
-6. BackgroundPreinitializer
-7. DelegatingApplicationListener
-8. FileEncodingApplicationListener
+
+4. AnsiOutputApplicationListener<br/>
+<blockquote>An ApplicationListener that configures AnsiOutput depending on the value of the property spring.output.ansi.enabled.</blockquote>
+尝试从`ConfigurableEnvironment`中读取配置项"spring.output.ansi.enabled"和"spring.output.ansi.console-available"，用来设置AnsiOutput（AnsiOutput应该指的是彩色日志打印）。
+
+5. LoggingApplicationListener<br/>
+根据配置初始化和设置日志系统。
+
+6. ClasspathLoggingApplicationListener<br/>
+<blockquote>A SmartApplicationListener that reacts to environment prepared events and to failed events by logging the classpath of the thread context class loader (TCCL) at DEBUG level.</blockquote>
+当程序正常启动成功时，将classpath打印到debug日志；当程序启动失败时，将classpath打印到info日志。（[参考《Spring Boot启动流程详解》][Spring Boot启动流程详解]）
+
+7. BackgroundPreinitializer
+<blockquote>ApplicationListener to trigger early initialization in a background thread of time consuming tasks.</blockquote>
+触发了一些耗时任务的预初始化，包括：
+  1. MessageConverterInitializer
+  2. MBeanFactoryInitializer
+  3. ValidationInitializer
+  4. JacksonInitializer
+  5. ConversionServiceInitializer
+
+8. DelegatingApplicationListener
+<blockquote>ApplicationListener that delegates to other listeners that are specified under a context.listener.classes environment property.</blockquote>
+根据`context.listener.classes`获取配置项（委托类的名字），加载`ApplicationListener`委托类，将event传给这些委托类处理。
+
+9. FileEncodingApplicationListener
+<blockquote>An ApplicationListener that halts application startup if the system file encoding does not match an expected value set in the environment. By default has no effect, but if you set spring.mandatory_file_encoding (or some camelCase or UPPERCASE variant of that) to the name of a character encoding (e.g. "UTF-8") then this initializer throws an exception when the file.encoding System property does not equal it.</blockquote>
+检查System Properties中的`file.encoding`值和配置项中的`spring.mandatoryFileEncoding`值是否匹配（`spring.mandatoryFileEncoding`的属性名是按照一定规则模糊匹配的），如果不匹配则抛异常终止启动过程。
 
 ##### <div id="ConfigFileApplicationListener处理ApplicationEnvironmentPreparedEvent">1.2.3.2.1 ConfigFileApplicationListener 处理 ApplicationEnvironmentPreparedEvent</div>
-加载`EnvironmentPostProcessor`，包含：
-0. SpringApplicationJsonEnvironmentPostProcessor<br/>
+加载`EnvironmentPostProcessor`，包含如下内容。其中`SpringBootConfigMergeProcessor`是实现了`Ordered`接口的最低优先级的`EnvironmentPostProcessor`。
+
+1. SpringApplicationJsonEnvironmentPostProcessor<br/>
 从`spring.application.json`或`SPRING_APPLICATION_JSON`加载json串格式的配置项，将其增加到ConfigurableEnvironment的property sources中，新增property source的名字为`spring.application.json`，优先级高于`jndiProperties`和`systemProperties`（没有这两个时会放在最前面）。参考资料见[Spring Boot 1.4.5](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/html/boot-features-external-config.html)和[Spring Boot 2.0](https://juejin.im/entry/5a4b33e6518825258227bfbe)。
-1. HostInfoEnvironmentPostProcessor<br/>
+
+2. HostInfoEnvironmentPostProcessor<br/>
 获取本机的网络相关的信息，生成一个名为`springCloudClientHostInfo`的property source加入到ConfigurableEnvironment中，property source的优先级为当前最低。
-2. CloudFoundryVcapEnvironmentPostProcessor<br/>
+
+3. CloudFoundryVcapEnvironmentPostProcessor<br/>
 貌似是用来处理Cloud Foundry的配置项的（存疑）。<br/>
 如果当前ConfigurableEnvironment中存在名为`VCAP_APPLICATION`或`VCAP_SERVICES`的配置项则生效，将`VCAP_APPLICATION`和`VCAP_SERVICES`中的json串配置扁平化，分别加上`vcap.application.`和`vcap.services.`前缀，放入到名为`vcap`的property source中，置入ConfigurableEnvironment，该property source的优先级仅次于"commandLineArgs"。
-3. ConfigFileApplicationListener<br/>
+
+4. ConfigFileApplicationListener<br/>
 Spring Boot在这里加载配置文件，操作内容包括：
   1. 增加一个`RandomValuePropertySource`，优先级低于"systemEnvironment"（ConfigFileApplicationListener.java 210行）
   2. 加载property source，设置active profiles
@@ -130,8 +160,72 @@ Spring Boot在这里加载配置文件，操作内容包括：
   3. 从System property中读取名为"spring.beaninfo.ignore"的属性，如果没有则从`ConfigurableEnvironment`中解析出对应的配置项（使用`RelaxedPropertyResolver`），默认值为`true`，并设置到System property中。<br/>
   根据查的资料，"spring.beaninfo.ignore"配置项似乎决定了是否跳过BeanInfo类加载。
   4. Bind the environment to the SpringApplication. 具体产生了什么效果还不明确。
-4. SpringBootConfigMergeProcessor
-5. ServoEnvironmentPostProcessor
+
+5. SpringBootConfigMergeProcessor<br/>
+这里取得SpringBoot的配置文件留待合入到ServiceComb中。<br/>
+现在发现这个processor会触发两次，一次是`BootstrapApplicationListener`触发重新生成SpringApplication，一次是外层的SpringBoot启动。现在发现可以根据配置项`spring.config.name`或`spring.application.name`区分。
+**TODO: 这里还需要考虑获取多次配置的场景下如何处理这些多的配置项**
+
+6. ServoEnvironmentPostProcessor<br/>
+尝试设置一个Netflix servo的默认配置项`spring.aop.proxyTargetClass`。<br/>
+如果ConfigurableEnvironment中包含一个名为"defaultProperties"的property source，且为MapPropertySource类型，则在其中设置`spring.aop.proxyTargetClass=true`；否则新建一个名为"defaultProperties"的property source设置配置项，该property source放在最低优先级位置。<br/>
+`ServoEnvironmentPostProcessor`没有实现`Ordered`接口或使用`@Order`/`@Priority`注解，所以会排在后面，这里的配置项`SpringBootConfigMergeProcessor`拿不到。
+
+### 1.2.4 prepareApplicationContext
+> 入口为 SpringApplication.java 312-314行。
+
+#### 1.2.4.1 createApplicationContext
+> Strategy method used to create the ApplicationContext. By default this method will respect any explicitly set application context or application context class before falling back to a suitable default.
+
+创建了一个`org.springframework.boot.context.embedded.AnnotationConfigEmbeddedWebApplicationContext`。
+
+#### 1.2.4.2 prepareContext
+
+##### 1.2.4.2.1 setEnvironment
+新创建的`AnnotationConfigEmbeddedWebApplicationContext`中有一个默认生成的`Environment`，这里将上一步生成的`ConfigurableEnvironment`设置进去替代它，并且还会设置到`AnnotationConfigEmbeddedWebApplicationContext.reader`和`AnnotationConfigEmbeddedWebApplicationContext.scanner`中，在解析占位符、判断`@Conditional`注解时需要用到。
+
+##### 1.2.4.2.2 postProcessApplicationContext
+- 加载`beanNameGenerator`
+- 在`ApplicationContext`中设置`resourceLoader`
+
+debug过程中发现这两个都是null，所以没有设置。
+
+##### 1.2.4.2.3 applyInitializers
+设置`ApplicationContextInitializer`，**根据网上查到的资料，`ApplicationContextInitializer`是Spring容器刷新之前执行的回调函数，对`ConfigurableApplicationContext`进行操作。**<br/>
+debug过程中发现加载的有：
+1. BootstrapApplicationListener$AncestorInitializer
+2. BootstrapApplicationListener$DelegatingEnvironmentDecryptApplicationInitializer
+3. PropertySourceBootstrapConfiguration$$EnhancerBySpringCGLIB$$64c5bba1
+4. EnvironmentDecryptApplicationInitializer
+5. DelegatingApplicationContextInitializer
+6. ContextIdApplicationContextInitializer
+7. ConfigurationWarningsApplicationContextInitializer
+8. ServerPortInfoApplicationContextInitializer
+9. SharedMetadataReaderFactoryContextInitializer
+10. AutoConfigurationReportLoggingInitializer
+
+
+1. BootstrapApplicationListener$AncestorInitializer<br/>
+`BootstrapApplicationListener$AncestorInitializer`中保存了之前`BootstrapApplicationListener`生成的`ConfigurableApplicationContext`。
+
+`AncestorInitializer`会拿到传入的`ConfigurableApplicationContext`的根context，
+如果根context的`Environment`中包含了名为"defaultProperties"的property source，会尝试将这个property source拆开重新放回去，不符合则直接移除。（在`BootstrapApplicationListener.AncestorInitializer.reorderSources()`方法中）
+
+
+2. BootstrapApplicationListener$DelegatingEnvironmentDecryptApplicationInitializer
+3. PropertySourceBootstrapConfiguration$$EnhancerBySpringCGLIB$$64c5bba1
+4. EnvironmentDecryptApplicationInitializer
+5. DelegatingApplicationContextInitializer<br/>
+根据`context.initializer.classes`配置项配置的类名加载委托`ApplicationContextInitializer`，将`ConfigurableApplicationContext`交给委托类初始化。
+6. ContextIdApplicationContextInitializer<br/>
+根据某些配置项生成ApplicationContext ID。
+7. ConfigurationWarningsApplicationContextInitializer<br/>
+ApplicationContextInitializer to report warnings for common misconfiguration mistakes. 用于检查配置错误。
+8. ServerPortInfoApplicationContextInitializer<br/>
+在`ConfigurableApplicationContext`中加入一个`ApplicationListener`监听`EmbeddedServletContainerInitializedEvent`，用于向`Environment`设置`EmbeddedServletContainer`实际监听的端口号。
+9. SharedMetadataReaderFactoryContextInitializer（实际作用还没弄明白）
+10. AutoConfigurationReportLoggingInitializer<br/>
+监听`ApplicationEvent`，打印auto configuration相关的信息。
 
 # 附加说明
 
@@ -278,4 +372,8 @@ A listener that stores enough information about an application as it starts, to 
 
 # References
 
-1. [SpringBoot源码分析之SpringBoot的启动过程](http://fangjian0423.github.io/2017/04/30/springboot-startup-analysis/ "SpringBoot源码分析之SpringBoot的启动过程")
+1. [SpringBoot源码分析之SpringBoot的启动过程][SpringBoot源码分析之SpringBoot的启动过程]
+2. [Spring Boot启动流程详解][Spring Boot启动流程详解]
+
+[SpringBoot源码分析之SpringBoot的启动过程]: http://fangjian0423.github.io/2017/04/30/springboot-startup-analysis/ "SpringBoot源码分析之SpringBoot的启动过程"
+[Spring Boot启动流程详解]: http://zhaox.github.io/java/2016/03/22/spring-boot-start-flow "Spring Boot启动流程详解"

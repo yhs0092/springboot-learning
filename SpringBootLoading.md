@@ -180,6 +180,7 @@ Spring Boot在这里加载配置文件，操作内容包括：
 创建了一个`org.springframework.boot.context.embedded.AnnotationConfigEmbeddedWebApplicationContext`。
 
 #### 1.2.4.2 prepareContext
+> 入口在 SpringApplication.java 314行。
 
 ##### 1.2.4.2.1 setEnvironment
 新创建的`AnnotationConfigEmbeddedWebApplicationContext`中有一个默认生成的`Environment`，这里将上一步生成的`ConfigurableEnvironment`设置进去替代它，并且还会设置到`AnnotationConfigEmbeddedWebApplicationContext.reader`和`AnnotationConfigEmbeddedWebApplicationContext.scanner`中，在解析占位符、判断`@Conditional`注解时需要用到。
@@ -204,28 +205,58 @@ debug过程中发现加载的有：
 9. SharedMetadataReaderFactoryContextInitializer
 10. AutoConfigurationReportLoggingInitializer
 
+_逐个分析这些`ApplicationContextInitializer`_
 
 1. BootstrapApplicationListener$AncestorInitializer<br/>
-`BootstrapApplicationListener$AncestorInitializer`中保存了之前`BootstrapApplicationListener`生成的`ConfigurableApplicationContext`。
+`BootstrapApplicationListener$AncestorInitializer`中保存了之前`BootstrapApplicationListener`生成的`ConfigurableApplicationContext`，放在`BootstrapApplicationListener.AncestorInitializer.parent`属性中。
 
-`AncestorInitializer`会拿到传入的`ConfigurableApplicationContext`的根context，
-如果根context的`Environment`中包含了名为"defaultProperties"的property source，会尝试将这个property source拆开重新放回去，不符合则直接移除。（在`BootstrapApplicationListener.AncestorInitializer.reorderSources()`方法中）
+  `AncestorInitializer`会拿到传入的`ConfigurableApplicationContext`的根context，
+  如果根context的`Environment`中包含了名为"defaultProperties"的property source，会尝试将这个property source拆开重新放回去。（在`BootstrapApplicationListener.AncestorInitializer.reorderSources()`方法中）
 
+  `BootstrapApplicationListener`生成的`AnnotationConfigApplicationContext`被设置为了当前`ApplicationContext`的parent；在当前`BeanFactory`中设置parent BeanFactory。并且将parent ApplicationContext的`ConfigurableEnvironment`和当前Application Context的`ConfigurableEnvironment`合并，具体操作有三条：
+    - 将parent ConfigurableEnvironment中，当前 ConfigurableEnvironment中没有的property source加入进来，放在最后。
+    - 将parent active profiles加入到当前 ConfigurableEnvironment的active profiles中。
+    - 如果parent default profiles存在，则从当前 ConfigurableEnvironment 的default profiles中移除名为`AbstractEnvironment.RESERVED_DEFAULT_PROFILE_NAME`的profile，将parent default activeProfiles加入进来。
 
-2. BootstrapApplicationListener$DelegatingEnvironmentDecryptApplicationInitializer
-3. PropertySourceBootstrapConfiguration$$EnhancerBySpringCGLIB$$64c5bba1
-4. EnvironmentDecryptApplicationInitializer
+  最后在当前`ApplicationContext`中增加了一个`ParentContextApplicationContextInitializer.EventPublisher`。这个`ApplicationListener`似乎是用来在`ApplicationContext`刷新之后用来广播`ParentContextAvailableEvent`消息的，以告知其他listener 当前`ApplicationContext`已可用，并且有一个parent context。_ApplicationContextInitializer for setting the parent context. Also publishes ParentContextApplicationContextInitializer.ParentContextAvailableEvent when the context is refreshed to signal to other listeners that the context is available and has a parent._
+
+2. BootstrapApplicationListener$DelegatingEnvironmentDecryptApplicationInitializer<br/>
+> `DelegatingEnvironmentDecryptApplicationInitializer`: A special initializer designed to run before the property source bootstrap and decrypt any properties needed there (e.g. URL of config server).
+>
+> `EnvironmentDecryptApplicationInitializer`: Decrypt properties from the environment and insert them with high priority so they override the encrypted values.
+
+  `DelegatingEnvironmentDecryptApplicationInitializer`中包含了一个`EnvironmentDecryptApplicationInitializer`，实际上`ConfigurableApplicationContext`是委托给后者处理的。具体功能参考[《SpringBoot应用配置项加密》][SpringBoot应用配置项加密]。如果存在加密的配置项被解密，则还会在parent ApplicationContext中发送一个`EnvironmentChangeEvent`消息。
+
+3. PropertySourceBootstrapConfiguration$$EnhancerBySpringCGLIB$$64c5bba1<br/>
+没看明白这是个什么对象，实际调用的方法是`PropertySourceBootstrapConfiguration.initialize()`。会调用`PropertySourceLocator`实例，加载property sources，保存到一个名为"bootstrapProperties"的`CompositePropertySource`中，并设置到`ConfigurableEnvironment`中。
+
+4. EnvironmentDecryptApplicationInitializer<br/>
+跟`BootstrapApplicationListener$DelegatingEnvironmentDecryptApplicationInitializer`的作用类似。这里也有可能在parent ApplicationContext中发送`EnvironmentChangeEvent`消息。
+
 5. DelegatingApplicationContextInitializer<br/>
 根据`context.initializer.classes`配置项配置的类名加载委托`ApplicationContextInitializer`，将`ConfigurableApplicationContext`交给委托类初始化。
+
 6. ContextIdApplicationContextInitializer<br/>
 根据某些配置项生成ApplicationContext ID。
+
 7. ConfigurationWarningsApplicationContextInitializer<br/>
-ApplicationContextInitializer to report warnings for common misconfiguration mistakes. 用于检查配置错误。
+> ApplicationContextInitializer to report warnings for common misconfiguration mistakes.
+
+  用于检查配置错误。在当前Application Context中增加一个`ConfigurationWarningsPostProcessor`。
+
 8. ServerPortInfoApplicationContextInitializer<br/>
 在`ConfigurableApplicationContext`中加入一个`ApplicationListener`监听`EmbeddedServletContainerInitializedEvent`，用于向`Environment`设置`EmbeddedServletContainer`实际监听的端口号。
-9. SharedMetadataReaderFactoryContextInitializer（实际作用还没弄明白）
+
+9. SharedMetadataReaderFactoryContextInitializer
+> ApplicationContextInitializer to create a shared CachingMetadataReaderFactory between the ConfigurationClassPostProcessor and Spring Boot.
+
+  实际作用还没弄明白，看注释跟Spring Bean加载有关系。
+
 10. AutoConfigurationReportLoggingInitializer<br/>
-监听`ApplicationEvent`，打印auto configuration相关的信息。
+>ApplicationContextInitializer that writes the ConditionEvaluationReport to the log. Reports are logged at the DEBUG level unless there was a problem, in which case they are the INFO level is used.
+This initializer is not intended to be shared across multiple application context instances.
+
+  监听`ApplicationEvent`，打印auto configuration相关的信息。
 
 # 附加说明
 
@@ -374,6 +405,8 @@ A listener that stores enough information about an application as it starts, to 
 
 1. [SpringBoot源码分析之SpringBoot的启动过程][SpringBoot源码分析之SpringBoot的启动过程]
 2. [Spring Boot启动流程详解][Spring Boot启动流程详解]
+3. [SpringBoot应用配置项加密][SpringBoot应用配置项加密]
 
 [SpringBoot源码分析之SpringBoot的启动过程]: http://fangjian0423.github.io/2017/04/30/springboot-startup-analysis/ "SpringBoot源码分析之SpringBoot的启动过程"
 [Spring Boot启动流程详解]: http://zhaox.github.io/java/2016/03/22/spring-boot-start-flow "Spring Boot启动流程详解"
+[SpringBoot应用配置项加密]: http://isouth.org/archives/364.html "SpringBoot应用配置项加密"

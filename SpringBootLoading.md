@@ -153,7 +153,7 @@ Spring Boot在这里加载配置文件，操作内容包括：
     - ConfigFileApplicationListener.java 377行，根据profile、文件名、路径、文件扩展名加载配置文件。加载成的property source在这个时候还不会直接加入到`ConfigurableEnvironment.propertySources`中，而是保存在当前用于加载配置文件的`PropertySourcesLoader`实例里。
     - ConfigFileApplicationListener.java 470行，读取到配置文件后还会再一次扫描active profile，如果读取到了就会将`ConfigurableEnvironment.activeProfiles`清空并set进去，然后将`ConfigFileApplicationListener.activatedProfiles`设置为`true`以保证只会设置一次profile（方法`ConfigFileApplicationListener.maybeActivateProfiles()`会检查`activatedProfiles`）。
     - 设置active profile之后会检查一次是否配置了`spring.profiles.include`属性，若配置了则将其中指定的 profile 加入到`ConfigFileApplicationListener`中，并设置到`ConfigurableEnvironment.activeProfiles`中（先清空再设置的）。
-    - ConfigFileApplicationListener.java 384行，经过反复加载配置文件之后（文件位置、文件名、profile、文件扩展名这几个维度），将`PropertySourcesLoader.propertySources`中保存的property sources加入到`ConfigurableEnvironment`中。
+    - ConfigFileApplicationListener.java 384行，经过反复加载配置文件之后（文件位置、文件名、profile、文件扩展名这几个维度），将`PropertySourcesLoader.propertySources`中保存的property sources加入到`ConfigurableEnvironment`中（ConfigFileApplicationListener.java 384行，`ConfigFileApplicationListener.Loader.load()`方法的结尾）。
     - ***TODO: 有条件进一步弄清楚`ConfigFileApplicationListener.loadIntoGroup()`方法的三个参数各有什么意义***<br/>
     当`ConfigFileApplicationListener.load()`方法的profile不为null时，为什么要分三个阶段调用`loadIntoGroup()`方法。<br/>
     _貌似这种反复加载是因为同一个配置文件中也可以配置多个profile的属性，待验证。参考[Multi-profile YAML documents](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/htmlsingle/#boot-features-external-config-multi-profile-yaml "Multi-profile YAML documents")。_
@@ -313,20 +313,91 @@ This initializer is not intended to be shared across multiple application contex
 初始化`Environment`中占位的property source。（AbstractApplicationContext.java 586行）例如，_Replace Servlet-based stub property sources with actual instances populated with the given servletContext and servletConfig objects._
 - validateRequiredProperties<br/>
 _Validate that each of the properties specified by setRequiredProperties is present and resolves to a non-null value._
-- 初始化`earlyApplicationEvents`用来保存`ApplicationEvent`以便之后发送。
+- _Allow for the collection of early ApplicationEvents, to be published once the multicaster is available..._ 初始化`earlyApplicationEvents`用来保存`ApplicationEvent`，以便之后再将之前接收到的，并且没有发出去的事件消息发送出去。
 
 #### 1.2.5.2 obtainFreshBeanFactory
 > Tell the subclass to refresh the internal bean factory.
 
-- refreshBeanFactory<br/>
->Subclasses must implement this method to perform the actual configuration load. The method is invoked by refresh() before any other initialization work.
+主要操作是`refreshBeanFactory()`方法<br/>
+> Subclasses must implement this method to perform the actual configuration load. The method is invoked by refresh() before any other initialization work.
 >
->A subclass will either create a new bean factory and hold a reference to it, or return a single BeanFactory instance that it holds. In the latter case, it will usually throw an IllegalStateException if refreshing the context more than once.
+> A subclass will either create a new bean factory and hold a reference to it, or return a single BeanFactory instance that it holds. In the latter case, it will usually throw an IllegalStateException if refreshing the context more than once.
 
-  刷新`BeanFactory`并返回它的引用。
+刷新`BeanFactory`并返回它的引用。
 
+#### 1.2.5.3 prepareBeanFactory
+> Configure the factory's standard context characteristics, such as the context's ClassLoader and post-processors.
 
+这个方法是配置 Bean 对象加载的。
 
+#### 1.2.5.4 postProcessBeanFactory
+> Allows post-processing of the bean factory in context subclasses.
+
+这里注册了`ServletContextAwareProcessor`。
+
+#### 1.2.5.5 invokeBeanFactoryPostProcessors
+> Instantiate and invoke all registered BeanFactoryPostProcessor beans, respecting explicit order if given.
+>
+>Must be called before singleton instantiation.
+
+从传入的参数`beanFactoryPostProcessors`中挑出`BeanDefinitionRegistryPostProcessor`类型的processor，调用`postProcessBeanDefinitionRegistry()`方法，此方法的注释： _"Modify the application context's internal bean definition registry after its standard initialization. All regular bean definitions will have been loaded, but no beans will have been instantiated yet. This allows for adding further bean definitions before the next post-processing phase kicks in."_
+
+按照`PriorityOrdered`,`Ordered`,其他，的顺序排列`BeanDefinitionRegistryPostProcessor`，调用`postProcessBeanDefinitionRegistry()`方法。
+
+_这里没看明白为什么上面分两批调用`postProcessBeanDefinitionRegistry()`方法，_
+
+PostProcessorRegistrationDelegate.java 126行，触发了`ConfigFileApplicationListener`的`postProcessBeanFactory()`方法，该方法调用`reorderSources()`，将`ConfigurableEnvironment`中的property source做了处理，把名为"applicationConfigurationProperties"的property source中包含的子property source展开插入到`ConfigurableEnvironment`中，位置和优先级保持不变，并将"applicationConfigurationProperties" property source本身移除。<br/>
+即，原先保存在"applicationConfigurationProperties"中的加载自各个配置文件的property source，现在直接存放于`ConfigurableEnvironment`中。<br/>
+最后，将名为"defaultProperties"的property source挪到了`ConfigurableEnvironment`的最低优先级位置。
+
+之前触发的都是`BeanDefinitionRegistryPostProcessor`类型的BeanFactoryPostProcessor，接下来触发的是其他的BeanFactoryPostProcessor（注释里面称之为"regular BeanPostProcessors"），也是按照`PriorityOrdered`,`Ordered`,其他，的顺序排列调用。关键的`BeanFactoryPostProcessor`包括：
+
+- **`ConfigurationSpringInitializer`，取出ServiceComb的配置回合到Spring中。**
+
+  参考`PropertySourcesPlaceholderConfigurer`，我们这里也应该可以继承`EnvironmentAware`来事先拿到`ConfigurableEnvironment`。
+
+- `PropertySourcesPlaceholderConfigurer`，解析bean 实例定义中的占位符，尝试用配置项去替换。这个类具有`PriorityOrdered`中的最低优先级。
+
+  根据其`postProcessBeanFactory()`方法的注释来看，Spring自己应该是不管之后再增加的property source的。
+
+  > Merge, convert and process properties against the given bean factory.
+  Processing occurs by replacing ${...} placeholders in bean definitions by resolving each against this configurer's set of PropertySources, which includes:
+  > - all environment property sources, if an Environment is present
+  > - merged local properties, if any have been specified
+  > - any property sources set by calling setPropertySources
+  >
+  > If setPropertySources is called, environment and local properties will be ignored. This method is designed to give the user fine-grained control over property sources, and once set, the configurer makes no assumptions about adding additional sources.
+
+- `LastPropertyPlaceholderConfigurer`，实现了`Ordered`接口，最低优先级，检查bean定义中是否还存在需要解析的占位符，若存在则抛出异常。
+
+- `ConfigurationPropertiesBindingPostProcessor`作为"nonOrderedPostProcessor"，在这之后被调用，其作用为 _"BeanPostProcessor to bind PropertySources to beans annotated with ConfigurationProperties"_ ，将配置值设置到`@ConfigurationProperties`注解标记的bean实例配置中。参考[《Guide to @ConfigurationProperties in Spring Boot》][configuration-properties-in-spring-boot]。
+
+#### 1.2.5.6 registerBeanPostProcessors
+> 入口在`AbstractApplicationContext.registerBeanPostProcessors()`方法。
+>
+> Instantiate and invoke all registered BeanPostProcessor beans, respecting explicit order if given.
+>
+> Must be called before any instantiation of application beans.
+
+调用`BeanFactory`的`addBeanPostProcessor()`方法，将`BeanPostProcessor`注册到`BeanFactory`中，注册顺序为`PriorityOrdered` -> `Ordered` -> 其他 -> 重注册"internalPostProcessors"（筛选出类型为`MergedBeanDefinitionPostProcessor`的processor组成） -> 增加一个`ApplicationListenerDetector`。
+
+#### 1.2.5.7 onRefresh
+**在这里创建了`EmbeddedServletContainer`**，入口在`EmbeddedWebApplicationContext.createEmbeddedServletContainer()`方法中。
+
+在`EmbeddedWebApplicationContext.createEmbeddedServletContainer()`方法的结尾调用`initPropertySources()`方法,
+根据内部调用方法的注释， _"Replace Servlet-based stub property sources with actual instances populated with the given servletContext and servletConfig objects.
+This method is idempotent with respect to the fact it may be called any number of times but will perform replacement of stub property sources with their corresponding actual property sources once and only once."_ 这里会尝试将"servletContextInitParams"和"servletConfigInitParams" property source 桩替换为实际的property source。
+
+#### 1.2.5.8 registerListeners
+此时，当前`ApplicationContext`中的`applicationEventMulticaster`已设置，向其中注册`ApplicationListener`，并将前面初始化的`earlyApplicationEvents`保存的事件消息通过`ApplicationContext.applicationEventMulticaster`发送出去。
+
+#### 1.2.5.9 finishBeanFactoryInitialization
+> Finish the initialization of this context's bean factory, initializing all remaining singleton beans.
+
+该方法中调用BeanFactory的`freezeConfiguration()`方法，根据这个方法的注释， _"Freeze all bean definitions, signalling that the registered bean definitions will not be modified or post-processed any further. This allows the factory to aggressively cache bean definition metadata."_ ，之后不会再有bean 对象配置的更改了。
+
+然后调用`beanFactory.preInstantiateSingletons()`，将所有非懒加载的singleton bean对象实例化出来。<br/>
+**此时也触发了`ArchaiusAutoConfiguration`的初始化，将Spring的配置合入到了 Archaius 中。具体位置在`ArchaiusAutoConfiguration.addArchaiusConfiguration()`方法。**
 
 # 附加说明
 
@@ -476,7 +547,11 @@ A listener that stores enough information about an application as it starts, to 
 1. [SpringBoot源码分析之SpringBoot的启动过程][SpringBoot源码分析之SpringBoot的启动过程]
 2. [Spring Boot启动流程详解][Spring Boot启动流程详解]
 3. [SpringBoot应用配置项加密][SpringBoot应用配置项加密]
+4. [什么是FactoryBean][what-s-a-factorybean]
+5. [ConfigurationProperties注解使用][configuration-properties-in-spring-boot]
 
 [SpringBoot源码分析之SpringBoot的启动过程]: http://fangjian0423.github.io/2017/04/30/springboot-startup-analysis/ "SpringBoot源码分析之SpringBoot的启动过程"
 [Spring Boot启动流程详解]: http://zhaox.github.io/java/2016/03/22/spring-boot-start-flow "Spring Boot启动流程详解"
 [SpringBoot应用配置项加密]: http://isouth.org/archives/364.html "SpringBoot应用配置项加密"
+[what-s-a-factorybean]: https://spring.io/blog/2011/08/09/what-s-a-factorybean "What's a FactoryBean?"
+[configuration-properties-in-spring-boot]: http://www.baeldung.com/configuration-properties-in-spring-boot "Guide to @ConfigurationProperties in Spring Boot"

@@ -344,7 +344,7 @@ _Validate that each of the properties specified by setRequiredProperties is pres
 
 按照`PriorityOrdered`,`Ordered`,其他，的顺序排列`BeanDefinitionRegistryPostProcessor`，调用`postProcessBeanDefinitionRegistry()`方法。
 
-_这里没看明白为什么上面分两批调用`postProcessBeanDefinitionRegistry()`方法，_
+_这里没看明白为什么上面分两批调用`postProcessBeanDefinitionRegistry()`方法。_
 
 PostProcessorRegistrationDelegate.java 126行，触发了`ConfigFileApplicationListener`的`postProcessBeanFactory()`方法，该方法调用`reorderSources()`，将`ConfigurableEnvironment`中的property source做了处理，把名为"applicationConfigurationProperties"的property source中包含的子property source展开插入到`ConfigurableEnvironment`中，位置和优先级保持不变，并将"applicationConfigurationProperties" property source本身移除。<br/>
 即，原先保存在"applicationConfigurationProperties"中的加载自各个配置文件的property source，现在直接存放于`ConfigurableEnvironment`中。<br/>
@@ -396,8 +396,25 @@ This method is idempotent with respect to the fact it may be called any number o
 
 该方法中调用BeanFactory的`freezeConfiguration()`方法，根据这个方法的注释， _"Freeze all bean definitions, signalling that the registered bean definitions will not be modified or post-processed any further. This allows the factory to aggressively cache bean definition metadata."_ ，之后不会再有bean 对象配置的更改了。
 
-然后调用`beanFactory.preInstantiateSingletons()`，将所有非懒加载的singleton bean对象实例化出来。<br/>
-**此时也触发了`ArchaiusAutoConfiguration`的初始化，将Spring的配置合入到了 Archaius 中。具体位置在`ArchaiusAutoConfiguration.addArchaiusConfiguration()`方法。**
+**然后调用`beanFactory.preInstantiateSingletons()`，将所有非懒加载的singleton bean对象实例化出来。**<br/>
+**此时也触发了`ArchaiusAutoConfiguration`的初始化，将Spring的配置合入到了 Archaius 中。** 具体位置在`ArchaiusAutoConfiguration.addArchaiusConfiguration()`方法。<br/>
+如果引入了`ConfigurationSpringInitializer`类，则会在更早的地方触发`DynamicProperty`:<br/>
+在`PostProcessorRegistrationDelegate.invokeBeanFactoryPostProcessors()`方法中会实例化`ConfigurationSpringInitializer`对象，其构造方法会调用`ConfigUtil.installDynamicConfig()`方法，触发`ConfigurationManager.install(dynamicConfig)`，在这个时候SpringBoot的配置就已经合入到Archiaus中了。
+<br/>
+**TODO: 还需要检查配置项优先级是否符合预期**
+
+#### 1.2.5.10 finishRefresh
+> Finish the refresh of this context, invoking the LifecycleProcessor's onRefresh() method and publishing the ContextRefreshedEvent.
+
+1. initLifecycleProcessor();
+2. getLifecycleProcessor().onRefresh();
+3. publishEvent(new ContextRefreshedEvent(this));
+4. LiveBeansView.registerApplicationContext(this);
+5. publishEvent(new EmbeddedServletContainerInitializedEvent(this, localContainer));
+
+内部做的事情主要是：
+- 在当前`ApplicationContext`中设置一个`LifecycleProcessor`实例，如果没有现成的`LifecycleProcessor`实例就创建一个`DefaultLifecycleProcessor`设置进去，其作用参考[《Spring中Bean的生命周期》][Spring中Bean的生命周期]。
+-
 
 # 附加说明
 
@@ -549,9 +566,11 @@ A listener that stores enough information about an application as it starts, to 
 3. [SpringBoot应用配置项加密][SpringBoot应用配置项加密]
 4. [什么是FactoryBean][what-s-a-factorybean]
 5. [ConfigurationProperties注解使用][configuration-properties-in-spring-boot]
+6. [Spring中Bean的生命周期][Spring中Bean的生命周期]
 
 [SpringBoot源码分析之SpringBoot的启动过程]: http://fangjian0423.github.io/2017/04/30/springboot-startup-analysis/ "SpringBoot源码分析之SpringBoot的启动过程"
 [Spring Boot启动流程详解]: http://zhaox.github.io/java/2016/03/22/spring-boot-start-flow "Spring Boot启动流程详解"
 [SpringBoot应用配置项加密]: http://isouth.org/archives/364.html "SpringBoot应用配置项加密"
 [what-s-a-factorybean]: https://spring.io/blog/2011/08/09/what-s-a-factorybean "What's a FactoryBean?"
 [configuration-properties-in-spring-boot]: http://www.baeldung.com/configuration-properties-in-spring-boot "Guide to @ConfigurationProperties in Spring Boot"
+[Spring中Bean的生命周期]: https://blog.csdn.net/ethanwhite/article/details/51533299 "Spring核心技术（六）——Spring中Bean的生命周期 - CSDN博客"

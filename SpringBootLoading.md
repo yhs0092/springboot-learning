@@ -344,7 +344,7 @@ _Validate that each of the properties specified by setRequiredProperties is pres
 
 按照`PriorityOrdered`,`Ordered`,其他，的顺序排列`BeanDefinitionRegistryPostProcessor`，调用`postProcessBeanDefinitionRegistry()`方法。
 
-_这里没看明白为什么上面分两批调用`postProcessBeanDefinitionRegistry()`方法，_
+_这里没看明白为什么上面分两批调用`postProcessBeanDefinitionRegistry()`方法。_
 
 PostProcessorRegistrationDelegate.java 126行，触发了`ConfigFileApplicationListener`的`postProcessBeanFactory()`方法，该方法调用`reorderSources()`，将`ConfigurableEnvironment`中的property source做了处理，把名为"applicationConfigurationProperties"的property source中包含的子property source展开插入到`ConfigurableEnvironment`中，位置和优先级保持不变，并将"applicationConfigurationProperties" property source本身移除。<br/>
 即，原先保存在"applicationConfigurationProperties"中的加载自各个配置文件的property source，现在直接存放于`ConfigurableEnvironment`中。<br/>
@@ -397,7 +397,12 @@ This method is idempotent with respect to the fact it may be called any number o
 该方法中调用BeanFactory的`freezeConfiguration()`方法，根据这个方法的注释， _"Freeze all bean definitions, signalling that the registered bean definitions will not be modified or post-processed any further. This allows the factory to aggressively cache bean definition metadata."_ ，之后不会再有bean 对象配置的更改了。
 
 然后调用`beanFactory.preInstantiateSingletons()`，将所有非懒加载的singleton bean对象实例化出来。<br/>
-**此时也触发了`ArchaiusAutoConfiguration`的初始化，将Spring的配置合入到了 Archaius 中。具体位置在`ArchaiusAutoConfiguration.addArchaiusConfiguration()`方法。**
+**此时也触发了`ArchaiusAutoConfiguration`的初始化，将Spring的配置合入到了 Archaius 中。** 具体位置在`ArchaiusAutoConfiguration.addArchaiusConfiguration()`方法。<br/>
+如果引入了`ConfigurationSpringInitializer`类，则会在更早的地方触发`DynamicProperty`:<br/>
+在`PostProcessorRegistrationDelegate.invokeBeanFactoryPostProcessors()`方法中会实例化`ConfigurationSpringInitializer`对象，其构造方法会调用`ConfigUtil.installDynamicConfig()`方法，触发`ConfigurationManager.install(dynamicConfig)`，在这个时候SpringBoot的配置就已经合入到Archiaus中了。
+<br/>
+**TODO: 还需要检查配置项优先级是否符合预期**
+
 
 # 附加说明
 

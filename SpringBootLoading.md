@@ -1,3 +1,68 @@
+# 简化版全流程
+
+1. SpringApplication.initialize(): 判断是否web程序、加载ContextInitializer、加载ApplicationListener
+2. SpringApplication.run()
+  1. 发送 started事件
+
+  2. 获取一个ConfigurableEnvironment对象，
+
+    加载部分property source，含命令行参数、SystemProperty、SystemEnvironment 以及servlet property source的桩
+
+  3. 发送 ApplicationEnvironmentPreparedEvent，
+
+    - 首先触发 BootstrapApplicationListener,  
+      **重新跑一边整个 SpringApplication 的加载流程**， 这一次加载的配置文件名默认为"bootstrap"；
+    - 然后触发 ConfigFileApplicationListener, 该 listener 加载触发了 EnvironmentPostProcessor 的运行， 包括
+      SpringApplicationJsonEnvironmentPostProcessor 从spring.application.json或SPRING_APPLICATION_JSON
+      加载json串格式的配置项作为一个property source；
+    - ConfigFileApplicationListener 自身会从不同的路径、profile、文件后缀名读取配置文件，作为一个property source加载；
+    - ServoEnvironmentPostProcessor 是一个没有实现 Ordered 和 PriorityOrdered 接口的 EnvironmentPostProcessor，
+      会向 ConfigurableEnvironment 中加一点配置
+
+  4. 准备 ApplicationContext，
+
+    加载触发 ApplicationContextInitializer， 其中
+    - BootstrapApplicationListener$AncestorInitializer 会更改名为"defaultProperties"的property source， 将前面
+      BootstrapApplicationListener 重跑 SpringApplication 加载流程跑出的 ApplicationContext 设置为这一个
+      ApplicationContext 的 parent， 还会根据 parent default profiles 更改当前 ConfigurableEnvironment 的 default profiles；
+    - BootstrapApplicationListener$DelegatingEnvironmentDecryptApplicationInitializer 会将配置项中加密了的配置
+      解密， 解密后会发送EnvironmentChangeEvent消息。
+    - ConfigurationWarningsApplicationContextInitializer, 检查配置错误。
+
+    ApplicationContext 加载完后，实现了 ApplicationContextAware 接口的 ApplicationListener 会被调用
+    setApplicationContext() 方法， 然后发送一个 ApplicationPreparedEvent 事件。
+
+  5. 刷新 ApplicationContext，
+
+    将 ConfigurableEnvironment 中占位的 servlet property source 桩替换为实际的property source实例。
+
+    准备 BeanFactory， 注册 ApplicationPreparedEvent， 触发 BeanFactoryPostProcessor。
+    需要注意的 BeanFactoryPostProcessor 有：
+    - ConfigurationSpringInitializer： ServiceComb 的配置项回合到Spring的机制
+    - PropertySourcesPlaceholderConfigurer： 解析 bean 实例定义中的占位符，尝试用配置项去替换。
+      这个类具有PriorityOrdered中的最低优先级。
+    - LastPropertyPlaceholderConfigurer： 实现了 Ordered 接口的最低优先级，
+      检查bean定义中是否还存在需要解析的占位符，若存在则抛出异常。
+    - ConfigurationPropertiesBindingPostProcessor： 未实现 PriorityOrdered/Ordered 接口，
+      将配置值设置到 @ConfigurationProperties 注解标记的 bean 实例配置中。
+
+    注册 BeanPostProcessor。 创建 EmbeddedServletContainer。
+
+    完成 BeanFactory 初始化。 **这里调用beanFactory.preInstantiateSingletons()，
+    将所有非懒加载的 singleton bean 对象实例化出来。 在没有触发 ServiceComb 的配置项回合Spring机制的情况下，这里
+    会触发 ArchaiusAutoConfiguration.addArchaiusConfiguration() 方法， 将 SpringBoot 的配置合入到 Archaius 中，
+    如果触发了 ServiceComb 的配置项回合Spring机制， 则在 ConfigurationSpringInitializer 初始化的时候调用
+    ConfigUtil.installDynamicConfig() 方法就已经将配置回合到 Archaius 中了。**
+
+    最后完成 ApplicationContext 刷新， 发送 ContextRefreshedEvent 消息， 启动内嵌的 web 容器（开始监听端口），
+    发送 EmbeddedServletContainerInitializedEvent 消息。
+
+> 以上是启动流程简要总结， 把涉及到配置项的部分基本都拎出来了。只写到了 refreshContext 完成。 到此为止 bean 对象实例加载完成， 对于 merge configuration 而言没必要往下分析了。
+
+------------------------------------------------------------------------------
+
+> 以下是启动流程的具体分析记录，其中有些细节还没完全弄清楚， 部分流程未总结完。
+
 # 1 主启动流程
 
 ## 1.1 SpringApplication.initialize()
@@ -156,7 +221,7 @@ Spring Boot在这里加载配置文件，操作内容包括：
     - ConfigFileApplicationListener.java 384行，经过反复加载配置文件之后（文件位置、文件名、profile、文件扩展名这几个维度），将`PropertySourcesLoader.propertySources`中保存的property sources加入到`ConfigurableEnvironment`中（ConfigFileApplicationListener.java 384行，`ConfigFileApplicationListener.Loader.load()`方法的结尾）。
     - ***TODO: 有条件进一步弄清楚`ConfigFileApplicationListener.loadIntoGroup()`方法的三个参数各有什么意义***<br/>
     当`ConfigFileApplicationListener.load()`方法的profile不为null时，为什么要分三个阶段调用`loadIntoGroup()`方法。<br/>
-    _貌似这种反复加载是因为同一个配置文件中也可以配置多个profile的属性，待验证。参考[Multi-profile YAML documents](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/htmlsingle/#boot-features-external-config-multi-profile-yaml "Multi-profile YAML documents")。_
+    _当前推测`ConfigFileApplicationListener.loadIntoGroup()`的三个参数，identifier 用于决定读取到的配置项应该存在哪个property source中， location 是文件的全路径（即文件路径+文件名）， profile 是从当前文件读取的目标profile 配置（比如application.yaml文件中可以指定 dev/prod 之类的profile，进而给出不同的配置值），这种反复加载是因为同一个配置文件中也可以配置多个profile的属性，待验证。参考[Multi-profile YAML documents](https://docs.spring.io/spring-boot/docs/1.4.5.RELEASE/reference/htmlsingle/#boot-features-external-config-multi-profile-yaml "Multi-profile YAML documents")。_
   3. 从System property中读取名为"spring.beaninfo.ignore"的属性，如果没有则从`ConfigurableEnvironment`中解析出对应的配置项（使用`RelaxedPropertyResolver`），默认值为`true`，并设置到System property中。<br/>
   根据查的资料，"spring.beaninfo.ignore"配置项似乎决定了是否跳过BeanInfo类加载。
   4. Bind the environment to the SpringApplication. 具体产生了什么效果还不明确。

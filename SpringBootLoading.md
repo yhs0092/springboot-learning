@@ -46,7 +46,7 @@
 
     完成 BeanFactory 初始化。 **这里调用beanFactory.preInstantiateSingletons()，
     将所有非 lazy-init 的 singleton bean 对象实例化出来。 在没有触发 ServiceComb 的配置项回合Spring机制的情况下，这里
-    会触发 ArchaiusAutoConfiguration.addArchaiusConfiguration() 方法， 将 SpringBoot 的配置合入到 Archaius 中，
+    触发的 ArchaiusAutoConfiguration.addArchaiusConfiguration() 方法会将 SpringBoot 的配置合入到 Archaius 中，
     如果触发了 ServiceComb 的配置项回合Spring机制， 则在 ConfigurationSpringInitializer 初始化的时候调用
     ConfigUtil.installDynamicConfig() 方法就已经将配置回合到 Archaius 中了。**
 
@@ -459,7 +459,7 @@ This method is idempotent with respect to the fact it may be called any number o
 
 **然后调用`beanFactory.preInstantiateSingletons()`，将所有非 lazy-init 的singleton bean对象实例化出来。**<br/>
 **此时也触发了`ArchaiusAutoConfiguration`的初始化，将Spring的配置合入到了 Archaius 中。** 具体位置在`ArchaiusAutoConfiguration.addArchaiusConfiguration()`方法。<br/>
-如果引入了`ConfigurationSpringInitializer`类，则会在更早的地方触发`DynamicProperty`:<br/>
+如果引入了`ConfigurationSpringInitializer`类，则会在更早的地方触发`Archaius`合入配置：<br/>
 在`PostProcessorRegistrationDelegate.invokeBeanFactoryPostProcessors()`方法中会实例化`ConfigurationSpringInitializer`对象，其构造方法会调用`ConfigUtil.installDynamicConfig()`方法，触发`ConfigurationManager.install(dynamicConfig)`，在这个时候SpringBoot的配置就已经合入到Archiaus中了。
 <br/>
 **TODO: 还需要检查配置项优先级是否符合预期**

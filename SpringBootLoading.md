@@ -414,7 +414,20 @@ This method is idempotent with respect to the fact it may be called any number o
 
 内部做的事情主要是：
 - 在当前`ApplicationContext`中设置一个`LifecycleProcessor`实例，如果没有现成的`LifecycleProcessor`实例就创建一个`DefaultLifecycleProcessor`设置进去，其作用参考[《Spring中Bean的生命周期》][Spring中Bean的生命周期]。
--
+- 在 BeanFactory 中查找实现了`SmartLifecycle`接口的singleton bean，将这些 bean 以 phase 的维度组织成 group ，并启动（`DefaultLifecycleProcessor.startBeans()`方法）。
+- 发送一个`ContextRefreshedEvent`，在自己（`AnnotationConfigEmbeddedWebApplicationContext`）和parent（`AnnotationConfigApplicationContext`）中都发送一遍（此后发送的消息都会在parent context里面也发一遍）。
+- 调用`LiveBeansView.registerApplicationContext(this)`，作用暂时不明。
+- _Starts the embedded servlet container. Calling this method on an already started container has no effect._ 启动了内嵌的 web 容器（开始监听端口）。
+- 发布`EmbeddedServletContainerInitializedEvent`消息。
+
+#### 1.2.5.11 registerShutdownHook
+> Register a shutdown hook with the JVM runtime, closing this context on JVM shutdown unless it has already been closed at that time.
+This method can be called multiple times. Only one shutdown hook (at max) will be registered for each context instance.
+
+在当前`ConfigurableApplicationContext`中注册一个 shutdown hook。
+
+### 1.2.6 listeners.finished
+_unfinished_
 
 # 附加说明
 

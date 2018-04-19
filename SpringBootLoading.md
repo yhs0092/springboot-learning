@@ -4,12 +4,10 @@
 2. SpringApplication.run()
   1. 发送 started事件
 
-  2. 获取一个ConfigurableEnvironment对象，
-
+  2. 获取一个ConfigurableEnvironment对象，<br/>
     加载部分property source，含命令行参数、SystemProperty、SystemEnvironment 以及servlet property source的桩
 
-  3. 发送 ApplicationEnvironmentPreparedEvent，
-
+  3. 发送 ApplicationEnvironmentPreparedEvent，<br/>
     - 首先触发 BootstrapApplicationListener,  
       **重新跑一边整个 SpringApplication 的加载流程**， 这一次加载的配置文件名默认为"bootstrap"；
     - 然后触发 ConfigFileApplicationListener, 该 listener 加载触发了 EnvironmentPostProcessor 的运行， 包括
@@ -19,8 +17,7 @@
     - ServoEnvironmentPostProcessor 是一个没有实现 Ordered 和 PriorityOrdered 接口的 EnvironmentPostProcessor，
       会向 ConfigurableEnvironment 中加一点配置
 
-  4. 准备 ApplicationContext，
-
+  4. 准备 ApplicationContext，<br/>
     加载触发 ApplicationContextInitializer， 其中
     - BootstrapApplicationListener$AncestorInitializer 会更改名为"defaultProperties"的property source， 将前面
       BootstrapApplicationListener 重跑 SpringApplication 加载流程跑出的 ApplicationContext 设置为这一个
@@ -32,8 +29,7 @@
     ApplicationContext 加载完后，实现了 ApplicationContextAware 接口的 ApplicationListener 会被调用
     setApplicationContext() 方法， 然后发送一个 ApplicationPreparedEvent 事件。
 
-  5. 刷新 ApplicationContext，
-
+  5. 刷新 ApplicationContext，<br/>
     将 ConfigurableEnvironment 中占位的 servlet property source 桩替换为实际的property source实例。
 
     准备 BeanFactory， 注册 ApplicationPreparedEvent， 触发 BeanFactoryPostProcessor。
